@@ -1587,30 +1587,9 @@ static int32_t msm_actuator_set_param(struct msm_actuator_ctrl_t *a_ctrl,
 		set_info->actuator_params.init_setting_size
 		<= MAX_ACTUATOR_INIT_SET) {
 		if (a_ctrl->func_tbl->actuator_init_focus) {
-			init_settings = kzalloc(sizeof(struct reg_settings_t) *
-				(set_info->actuator_params.init_setting_size),
-				GFP_KERNEL);
-			if (init_settings == NULL) {
-				kfree(a_ctrl->i2c_reg_tbl);
-				a_ctrl->i2c_reg_tbl = NULL;
-				pr_err("Error allocating memory for init_settings\n");
-				return -EFAULT;
-			}
-			if (copy_from_user(init_settings,
-				(void *)set_info->actuator_params.init_settings,
-				set_info->actuator_params.init_setting_size *
-				sizeof(struct reg_settings_t))) {
-				kfree(init_settings);
-				kfree(a_ctrl->i2c_reg_tbl);
-				a_ctrl->i2c_reg_tbl = NULL;
-				pr_err("Error copying init_settings\n");
-				return -EFAULT;
-			}
 			rc = a_ctrl->func_tbl->actuator_init_focus(a_ctrl,
 				set_info->actuator_params.init_setting_size,
-				init_settings);
-			kfree(init_settings);
-			init_settings = NULL;
+				set_info->actuator_params.init_settings);
 			if (rc < 0) {
 				kfree(a_ctrl->i2c_reg_tbl);
 				a_ctrl->i2c_reg_tbl = NULL;
