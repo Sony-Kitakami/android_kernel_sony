@@ -29,19 +29,13 @@
 
 struct ldo_vibrator_data {
 	struct device *dev;
-	struct hrtimer vib_timer;		
+	struct hrtimer vib_timer;
 	struct timed_output_dev timed_dev;
 	struct work_struct work;
 
 	int gpio;
 	int state;
 	int timeout;
-	int intensity;
-
-	unsigned int pwm_high;  // High duty cycle in usec
-	unsigned int pwm_low;	// Low  duty cycle in usec
-
 	struct mutex lock;
 };
-
 #endif

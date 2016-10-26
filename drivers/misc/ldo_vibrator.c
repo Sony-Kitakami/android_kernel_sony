@@ -27,44 +27,15 @@
 #include <linux/pm.h>
 #include <linux/slab.h>
 
-/* Vibration controller target area */
-#define MIN_TRG_ADJUST_VAL 				30000	// Vibration times under the following value in usec are not affected by the Intensity settings
-#define MAX_TRG_ADJUST_VAL				100000	// Vibration times above the following value in usec are not affected by the Intensity settings
-
-/* Vibration Intensity Adjustments */
-#define LDO_VIBRATOR_INTENISTY_HIGH		2500	// Time in usec for HIGH duty cycles | Indicates vibration Intensity
-#define LDO_VIBRATOR_INTENISTY_LOW		875	// Time in usec for LOW  duty cycles | Indicates breaks between HIGH pulses
-
 enum ldo_vibrator_state {
 	LDO_VIBRATOR_OFF,
 	LDO_VIBRATOR_ON,
 };
 
-static void ldo_vibrator_vib_toggle(struct ldo_vibrator_data *data)
+static void ldo_vibrator_vib_set(struct ldo_vibrator_data *data, int on)
 {
-	dev_dbg(data->dev, "%s vibrator set state(%d)\n", __func__, data->state);
-	gpio_set_value(data->gpio, data->state);
-}
-
-/* Vibration Cotroller/Regulator */
-static void ldo_vibrator_vib_control(struct ldo_vibrator_data *data, int timeout)
-{
-	unsigned int cycle = data->pwm_high; // Stores current cycle and its time
-
-	/* Run until target timeout has been reached */
-	int time;
-	for (time = 0; time < timeout; time += cycle)
-	{
-		ldo_vibrator_vib_toggle(data);
-		usleep(cycle);
-
-		cycle = ((cycle == data->pwm_high) ? data->pwm_low : data->pwm_high); 
-		data->state = ((data->state) ? LDO_VIBRATOR_OFF : LDO_VIBRATOR_ON);
-	}
-
-	/* Make sure vibrator is off after toggles*/
-	data->state = LDO_VIBRATOR_OFF;
-	ldo_vibrator_vib_toggle(data);
+	dev_dbg(data->dev, "%s vibrator set state(%d)\n", __func__, on);
+	gpio_set_value(data->gpio, on);
 }
 
 static void ldo_vibrator_vib_work(struct work_struct *work)
@@ -73,7 +44,7 @@ static void ldo_vibrator_vib_work(struct work_struct *work)
 				struct ldo_vibrator_data, work);
 
 	dev_dbg(data->dev, "%s vib state(%d)\n", __func__, data->state);
-	ldo_vibrator_vib_toggle(data);
+	ldo_vibrator_vib_set(data, data->state);
 }
 
 static enum hrtimer_restart ldo_vibrator_vib_timer(struct hrtimer *timer)
@@ -108,29 +79,23 @@ static void ldo_vibrator_vib_enable(struct timed_output_dev *dev, int value)
 	struct ldo_vibrator_data *data = container_of(dev,
 						      struct ldo_vibrator_data,
 						      timed_dev);
+
 	mutex_lock(&data->lock);
+	hrtimer_cancel(&data->vib_timer);
 
-	if (value) {
-		unsigned long duration = value * 1000;
-
-		if (duration > MIN_TRG_ADJUST_VAL && duration < MAX_TRG_ADJUST_VAL) {
-
-			data->pwm_high = LDO_VIBRATOR_INTENISTY_HIGH;
-			data->pwm_low  = LDO_VIBRATOR_INTENISTY_LOW;
-		} else {
-			/* Constant stream of current until time-out */
-			data->pwm_high = duration;
-			data->pwm_low = 0;
-		}
-
-		data->state = LDO_VIBRATOR_ON;
-		ldo_vibrator_vib_control(data, duration);
-	} else {
+	dev_dbg(data->dev, "%s: timer value(%d)\n", __func__, value);
+	if (value == 0) {
 		data->state = LDO_VIBRATOR_OFF;
-		ldo_vibrator_vib_toggle(data);
+	} else {
+		data->state = LDO_VIBRATOR_ON;
+		hrtimer_start(&data->vib_timer,
+			      ktime_set(value / MSEC_PER_SEC,
+					(value % MSEC_PER_SEC) *
+					NSEC_PER_MSEC),
+					HRTIMER_MODE_REL);
 	}
-
 	mutex_unlock(&data->lock);
+	schedule_work(&data->work);
 }
 
 #ifdef CONFIG_PM
@@ -138,12 +103,10 @@ static int ldo_vibrator_suspend(struct device *dev)
 {
 	struct ldo_vibrator_data *data = dev_get_drvdata(dev);
 
+	hrtimer_cancel(&data->vib_timer);
 	cancel_work_sync(&data->work);
-
-	data->state = LDO_VIBRATOR_OFF;
-
 	/* turn-off vibrator */
-	ldo_vibrator_vib_toggle(data);
+	ldo_vibrator_vib_set(data, 0);
 
 	return 0;
 }
@@ -223,9 +186,9 @@ static int ldo_vibrator_remove(struct platform_device *pdev)
 {
 	struct ldo_vibrator_data *data = dev_get_drvdata(&pdev->dev);
 
+	hrtimer_cancel(&data->vib_timer);
 	cancel_work_sync(&data->work);
-	data->state = LDO_VIBRATOR_OFF;
-	ldo_vibrator_vib_toggle(data);
+	ldo_vibrator_vib_set(data, 0);
 	timed_output_dev_unregister(&data->timed_dev);
 	mutex_destroy(&data->lock);
 
